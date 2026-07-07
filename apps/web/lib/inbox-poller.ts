@@ -63,26 +63,50 @@ export function normalizeMessageId(id: string): string | null {
 }
 
 /**
- * Finds a prior inbound_emails row with the same Message-ID, regardless of which
- * connection it came in on.
+ * Decides whether an about-to-be-inserted inbound email is a duplicate of one
+ * already in the DB, regardless of which connection it came in on.
  *
  * A delegated/shared mailbox polled through two separate connections (e.g. an
  * owner account and a delegate account both configured in Lightreach) sees the
  * same physical message twice, each with its own per-connection UID — the
- * `(connectionId, uid)` unique index doesn't catch that. This is the fallback
- * layer that stops it from surfacing as two separate inbox entries / leads.
+ * `(connectionId, uid)` unique index doesn't catch that.
+ *
+ * Which copy is "canonical" matters beyond just hiding the extra row: replying
+ * uses the canonical row's mailbox. So canonical isn't "whichever landed
+ * first" — it's whichever connection's own address is the message's actual
+ * recipient (`toEmail`). If an earlier poll happened to insert the mirrored
+ * copy first, this demotes it and promotes the true-recipient copy instead.
  */
-async function findDuplicateByMessageId(messageId: string): Promise<number | null> {
+async function resolveDuplicateOnInsert(
+  messageId: string,
+  toEmail: string,
+  connectionFromEmail: string,
+): Promise<{ isDuplicate: boolean }> {
   const normalized = normalizeMessageId(messageId)
-  if (!normalized) return null
+  if (!normalized) return { isDuplicate: false }
 
-  const [existing] = await db
-    .select({ id: inboundEmails.id })
+  const existingRows = await db
+    .select({
+      id: inboundEmails.id,
+      isDuplicate: inboundEmails.isDuplicate,
+      connectionFromEmail: connections.fromEmail,
+    })
     .from(inboundEmails)
+    .leftJoin(connections, eq(inboundEmails.connectionId, connections.id))
     .where(sql`replace(replace(${inboundEmails.messageId}, '<', ''), '>', '') = ${normalized}`)
-    .limit(1)
 
-  return existing?.id ?? null
+  if (existingRows.length === 0) return { isDuplicate: false }
+
+  const newIsTrueRecipient = connectionFromEmail.toLowerCase() === toEmail.toLowerCase()
+  const canonical = existingRows.find((r) => !r.isDuplicate)
+  const canonicalIsTrueRecipient = canonical?.connectionFromEmail?.toLowerCase() === toEmail.toLowerCase()
+
+  if (canonical && newIsTrueRecipient && !canonicalIsTrueRecipient) {
+    await db.update(inboundEmails).set({ isDuplicate: true }).where(eq(inboundEmails.id, canonical.id))
+    return { isDuplicate: false }
+  }
+
+  return { isDuplicate: true }
 }
 
 function isBounceEmail(email: ParsedEmail): boolean {
@@ -372,10 +396,12 @@ async function runPoll(): Promise<void> {
       for (const email of emails) {
         const filtered = isFilteredMatch(email.subject, email.bodyText, keywords)
         const bounce = isBounceEmail(email)
-        // Checked before insert so the row this email would conflict with (if any)
-        // is still there to find; still inserted either way to advance this
-        // connection's UID cursor and to preserve an audit trail per mailbox.
-        const duplicateOf = email.messageId ? await findDuplicateByMessageId(email.messageId) : null
+        // Resolved before insert: may flip an existing row from canonical to
+        // duplicate if this connection turns out to be the true recipient —
+        // still inserted either way to advance this connection's UID cursor.
+        const dupResolution = email.messageId
+          ? await resolveDuplicateOnInsert(email.messageId, email.toEmail, conn.fromEmail)
+          : { isDuplicate: false }
 
         const inserted = await db
           .insert(inboundEmails)
@@ -393,14 +419,14 @@ async function runPoll(): Promise<void> {
             bodyHtml: email.bodyHtml,
             isFiltered: filtered,
             isBounce: bounce,
-            isDuplicate: duplicateOf != null,
+            isDuplicate: dupResolution.isDuplicate,
             receivedAt: email.receivedAt,
           })
           .onConflictDoNothing()
 
         // Only classify newly inserted, non-duplicate emails — a duplicate was
         // already classified (bounce/reply/unsubscribe) when its first copy landed.
-        if (inserted.changes > 0 && duplicateOf == null) {
+        if (inserted.changes > 0 && !dupResolution.isDuplicate) {
           await classifyAndActOnInbound(email)
         }
       }
