@@ -48,6 +48,7 @@ export default async function InboxPage() {
       })
       .from(inboundEmails)
       .leftJoin(connections, eq(inboundEmails.connectionId, connections.id))
+      .where(eq(inboundEmails.isDuplicate, false))
       .orderBy(desc(inboundEmails.receivedAt))
       .limit(500),
 

@@ -62,6 +62,29 @@ export function normalizeMessageId(id: string): string | null {
   return normalized || null
 }
 
+/**
+ * Finds a prior inbound_emails row with the same Message-ID, regardless of which
+ * connection it came in on.
+ *
+ * A delegated/shared mailbox polled through two separate connections (e.g. an
+ * owner account and a delegate account both configured in Lightreach) sees the
+ * same physical message twice, each with its own per-connection UID — the
+ * `(connectionId, uid)` unique index doesn't catch that. This is the fallback
+ * layer that stops it from surfacing as two separate inbox entries / leads.
+ */
+async function findDuplicateByMessageId(messageId: string): Promise<number | null> {
+  const normalized = normalizeMessageId(messageId)
+  if (!normalized) return null
+
+  const [existing] = await db
+    .select({ id: inboundEmails.id })
+    .from(inboundEmails)
+    .where(sql`replace(replace(${inboundEmails.messageId}, '<', ''), '>', '') = ${normalized}`)
+    .limit(1)
+
+  return existing?.id ?? null
+}
+
 function isBounceEmail(email: ParsedEmail): boolean {
   const from = email.fromEmail.toLowerCase()
   const name = email.fromName.toLowerCase()
@@ -349,6 +372,10 @@ async function runPoll(): Promise<void> {
       for (const email of emails) {
         const filtered = isFilteredMatch(email.subject, email.bodyText, keywords)
         const bounce = isBounceEmail(email)
+        // Checked before insert so the row this email would conflict with (if any)
+        // is still there to find; still inserted either way to advance this
+        // connection's UID cursor and to preserve an audit trail per mailbox.
+        const duplicateOf = email.messageId ? await findDuplicateByMessageId(email.messageId) : null
 
         const inserted = await db
           .insert(inboundEmails)
@@ -366,12 +393,14 @@ async function runPoll(): Promise<void> {
             bodyHtml: email.bodyHtml,
             isFiltered: filtered,
             isBounce: bounce,
+            isDuplicate: duplicateOf != null,
             receivedAt: email.receivedAt,
           })
           .onConflictDoNothing()
 
-        // Only classify newly inserted emails (skip duplicates)
-        if (inserted.changes > 0) {
+        // Only classify newly inserted, non-duplicate emails — a duplicate was
+        // already classified (bounce/reply/unsubscribe) when its first copy landed.
+        if (inserted.changes > 0 && duplicateOf == null) {
           await classifyAndActOnInbound(email)
         }
       }

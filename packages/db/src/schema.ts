@@ -261,6 +261,10 @@ export const inboundEmails = sqliteTable(
     isFiltered: integer("is_filtered", { mode: "boolean" }).notNull().default(false),
     /** true when this message looks like a DSN/bounce notification (mailer-daemon, NDR subject, etc.) */
     isBounce: integer("is_bounce", { mode: "boolean" }).notNull().default(false),
+    /** true when the same Message-ID was already seen on another connection (e.g. a
+     *  delegated/shared mailbox polled through two separate connections) — hidden
+     *  from the inbox UI and skipped for classification, but kept for uid tracking. */
+    isDuplicate: integer("is_duplicate", { mode: "boolean" }).notNull().default(false),
     isRead: integer("is_read", { mode: "boolean" }).notNull().default(false),
     /** set when the user sends a reply to this inbound email */
     repliedAt: integer("replied_at", { mode: "timestamp" }),
