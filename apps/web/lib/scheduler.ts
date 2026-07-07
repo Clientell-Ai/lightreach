@@ -396,7 +396,8 @@ async function runTick(): Promise<void> {
 
     const renderedSubject =
       threadSubject ?? renderVariables(expandSpintax(step.subject), vars)
-    const renderedBody = appendUnsubscribeFooter(renderVariables(expandSpintax(step.body), vars))
+    const renderedPlainBody = appendUnsubscribeFooter(renderVariables(expandSpintax(step.body), vars))
+    const renderedBody = renderedPlainBody.replace(/\n/g, '<br>')
 
     // Decrypt SMTP password
     let smtpPass: string
@@ -464,6 +465,7 @@ async function runTick(): Promise<void> {
           to: lead.email,
           subject: renderedSubject,
           html: renderedBody,
+          text: renderedPlainBody,
           messageId: outboundMessageId,
           inReplyTo: threadInReplyTo,
           references: threadReferences,

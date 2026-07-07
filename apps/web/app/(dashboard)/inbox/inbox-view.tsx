@@ -468,9 +468,14 @@ function EmailSheet({
                 <div key={`out-${msg.id}`} className="flex justify-end">
                   <div className="max-w-[80%]">
                     <div className="rounded-2xl rounded-tr-sm border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm">
-                      <pre className="text-foreground whitespace-pre-wrap font-sans text-sm leading-relaxed">
-                        {msg.body ?? '(empty)'}
-                      </pre>
+                      {msg.body ? (
+                        <div
+                          className="prose prose-sm dark:prose-invert max-w-none text-sm"
+                          dangerouslySetInnerHTML={{ __html: msg.body }}
+                        />
+                      ) : (
+                        <p className="text-muted-foreground text-sm italic">(empty)</p>
+                      )}
                     </div>
                     <p className="mt-1 text-right text-xs text-muted-foreground pr-1">
                       {msg.fromEmail ? `${msg.fromEmail} · ` : ''}{formatDate(msg.sentAt)}

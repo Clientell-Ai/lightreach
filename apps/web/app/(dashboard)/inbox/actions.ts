@@ -221,7 +221,7 @@ export async function replyToEmail(
       sentAt: new Date(),
       messageId: normalizeMessageId(outboundMessageId),
       renderedSubject: subject,
-      renderedBody: body,
+      renderedBody: body.replace(/\n/g, '<br>'),
     })
 
     await db.update(inboundEmails).set({ isRead: true, repliedAt: new Date() }).where(eq(inboundEmails.id, inboundId))

@@ -80,9 +80,13 @@ export function buildMessageId(fromEmail: string, uuid: string): string {
  * cold outreach with a bare "unsubscribe" URL reads as bulk/marketing mail and
  * hurts deliverability more than it helps. The inbox poller watches replies
  * for this exact phrasing and marks the lead unsubscribed automatically.
+ *
+ * Appended as plain text (not styled HTML) so it flows through the same
+ * newline-to-<br> conversion as the rest of the body and reads like a normal
+ * line of the message rather than a mismatched footer.
  */
-export function appendUnsubscribeFooter(html: string): string {
-  return `${html}<p style="color:#888888;font-size:12px;margin-top:24px;">If you'd rather not hear from us again, just reply with "STOP" and we'll take you off this list.</p>`;
+export function appendUnsubscribeFooter(text: string): string {
+  return `${text}\n\nIf you'd rather not hear from us again, just reply with "STOP" and we'll take you off this list.`;
 }
 
 // ---------------------------------------------------------------------------
