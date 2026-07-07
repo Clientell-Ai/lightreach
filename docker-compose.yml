@@ -24,29 +24,18 @@ services:
       DATABASE_URL: file:/data/data.db
     volumes:
       - lightreach-data:/data
-    ports:
-      - "3000:3000"
     restart: unless-stopped
-
-  # --- optional: automatic HTTPS reverse proxy ---------------------------------
-  # Uncomment if this VPS has no reverse proxy of its own. Point a domain's DNS
-  # at the VPS, set it in Caddyfile, and Caddy will provision/renew Let's
-  # Encrypt certs automatically.
-  #
-  # caddy:
-  #   image: caddy:2-alpine
-  #   depends_on:
-  #     - web
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./Caddyfile:/etc/caddy/Caddyfile
-  #     - caddy-data:/data
-  #     - caddy-config:/config
-  #   restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lightreach.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.lightreach.entrypoints=websecure"
+      - "traefik.http.routers.lightreach.tls=true"
+      - "traefik.http.routers.lightreach.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lightreach.middlewares=lightreach-ratelimit,lightreach-auth"
+      - "traefik.http.middlewares.lightreach-auth.basicauth.users=${BASIC_AUTH_USERS}"
+      - "traefik.http.middlewares.lightreach-ratelimit.ratelimit.average=5"
+      - "traefik.http.middlewares.lightreach-ratelimit.ratelimit.burst=10"
+      - "traefik.http.services.lightreach.loadbalancer.server.port=3000"
 
 volumes:
   lightreach-data:
-  # caddy-data:
-  # caddy-config:
