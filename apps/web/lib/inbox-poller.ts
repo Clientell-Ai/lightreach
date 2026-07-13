@@ -143,6 +143,14 @@ function isUnsubscribeReply(bodyText: string | null, subject: string): boolean {
 
 export type LeadMatch = { leadId: number; campaignId: number | null }
 
+/** Domain part of an email address, lowercased. Used to tolerate replies that
+ *  arrive from a different mailbox on the same domain (e.g. a shared team
+ *  inbox where the reply comes from support@ instead of the hello@ address
+ *  we originally emailed). */
+function emailDomain(addr: string): string {
+  return addr.toLowerCase().trim().split('@')[1] ?? ''
+}
+
 /** Strip any run of leading "Re:" prefixes and normalize for comparison. */
 export function normalizeSubject(subject: string | null): string {
   return (subject ?? '')
@@ -314,12 +322,16 @@ async function classifyAndActOnInbound(email: ParsedEmail): Promise<void> {
   if (OUT_OF_OFFICE_SUBJECT_RE.test(email.subject)) return
 
   // Header-threading match, cross-checked against the matched lead's own
-  // address so a forwarded copy of our email replied to by a third party (or
-  // an auto-responder sent from a different address) doesn't count as a reply.
+  // domain so a forwarded copy of our email replied to by an unrelated third
+  // party (or an auto-responder on an unrelated domain) doesn't count as a
+  // reply. Domain-level (not exact-address) comparison because replies
+  // routinely arrive from a different mailbox on the same domain — e.g. a
+  // shared team inbox where the reply comes from support@ instead of the
+  // hello@ address we originally emailed.
   let match = await matchLeadByReferences(email.inReplyTo, email.references)
   if (match) {
     const [matchedLead] = await db.select({ email: leads.email }).from(leads).where(eq(leads.id, match.leadId))
-    if (!matchedLead || matchedLead.email.toLowerCase() !== email.fromEmail.toLowerCase()) {
+    if (!matchedLead || emailDomain(matchedLead.email) !== emailDomain(email.fromEmail)) {
       match = null
     }
   }
