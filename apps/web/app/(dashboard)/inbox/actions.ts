@@ -290,6 +290,7 @@ export async function getOutboundMessages(inboundId: number): Promise<OutboundMe
     .from(messages)
     .leftJoin(connections, eq(messages.connectionId, connections.id))
     .where(and(eq(messages.status, 'sent'), eq(messages.leadId, thread.leadId)))
+    .orderBy(messages.sentAt)
 
   return rows.map((r) => {
     let sentAt: string | null = null
@@ -306,4 +307,102 @@ export async function getOutboundMessages(inboundId: number): Promise<OutboundMe
       fromEmail: r.fromEmail ?? null,
     }
   })
+}
+
+export type ThreadMessage = {
+  id: number
+  direction: 'inbound' | 'outbound'
+  subject: string | null
+  body: string | null
+  date: string | null
+  fromEmail: string | null
+}
+
+/**
+ * Full two-way conversation for an inbound email: the resolved lead's outbound
+ * sends merged with all of their inbound replies, in chronological order.
+ *
+ * getOutboundMessages() above only returns the outbound half, unordered — the
+ * /inbox UI works around that by separately fetching inbound rows and merging
+ * client-side (see inbox-view.tsx's `conversation` merge). MCP callers (the
+ * get_thread tool) had no equivalent, so they only ever saw one-sided,
+ * out-of-order history. This gives them the same merged view the UI shows.
+ */
+export async function getFullThread(inboundId: number): Promise<ThreadMessage[]> {
+  const [inbound] = await db
+    .select({
+      inReplyTo: inboundEmails.inReplyTo,
+      references: inboundEmails.references,
+      fromEmail: inboundEmails.fromEmail,
+      subject: inboundEmails.subject,
+      connectionId: inboundEmails.connectionId,
+    })
+    .from(inboundEmails)
+    .where(eq(inboundEmails.id, inboundId))
+
+  if (!inbound) return []
+
+  const thread = await resolveThreadLead(inbound)
+  const lowerFromEmail = inbound.fromEmail.toLowerCase()
+
+  const [outboundRows, inboundRows] = await Promise.all([
+    thread
+      ? db
+          .select({
+            id: messages.id,
+            subject: messages.renderedSubject,
+            body: messages.renderedBody,
+            sentAt: messages.sentAt,
+            fromEmail: connections.fromEmail,
+          })
+          .from(messages)
+          .leftJoin(connections, eq(messages.connectionId, connections.id))
+          .where(and(eq(messages.status, 'sent'), eq(messages.leadId, thread.leadId)))
+          .orderBy(messages.sentAt)
+      : Promise.resolve([]),
+    db
+      .select({
+        id: inboundEmails.id,
+        subject: inboundEmails.subject,
+        body: inboundEmails.bodyText,
+        receivedAt: inboundEmails.receivedAt,
+        fromEmail: inboundEmails.fromEmail,
+      })
+      .from(inboundEmails)
+      .where(
+        and(
+          eq(sql`lower(${inboundEmails.fromEmail})`, lowerFromEmail),
+          eq(inboundEmails.isDuplicate, false),
+          eq(inboundEmails.isBounce, false),
+        ),
+      )
+      .orderBy(inboundEmails.receivedAt),
+  ])
+
+  const toIso = (d: Date | number | null): string | null => {
+    if (!d) return null
+    return d instanceof Date ? d.toISOString() : new Date((d as number) * 1000).toISOString()
+  }
+
+  const combined: ThreadMessage[] = [
+    ...outboundRows.map((r) => ({
+      id: r.id,
+      direction: 'outbound' as const,
+      subject: r.subject ?? null,
+      body: r.body ?? null,
+      date: toIso(r.sentAt),
+      fromEmail: r.fromEmail ?? null,
+    })),
+    ...inboundRows.map((r) => ({
+      id: r.id,
+      direction: 'inbound' as const,
+      subject: r.subject ?? null,
+      body: r.body ?? null,
+      date: toIso(r.receivedAt),
+      fromEmail: r.fromEmail ?? null,
+    })),
+  ]
+
+  combined.sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
+  return combined
 }

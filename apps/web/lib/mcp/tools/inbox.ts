@@ -8,7 +8,7 @@ import {
   replyToEmail,
   categorizeEmail,
   triggerFetch,
-  getOutboundMessages,
+  getFullThread,
 } from '@/app/(dashboard)/inbox/actions'
 import { ok, err } from './shared'
 
@@ -65,10 +65,10 @@ export function registerInboxTools(server: McpServer) {
 
   server.tool(
     'get_thread',
-    'Get the outbound message history for a conversation thread linked to an inbound email',
+    'Get the full two-way conversation history (inbound replies and outbound sends, chronologically ordered) for a thread linked to an inbound email',
     { inboundId: z.number().int().positive().describe('Inbound email ID') },
     async ({ inboundId }) => {
-      const msgs = await getOutboundMessages(inboundId)
+      const msgs = await getFullThread(inboundId)
       return ok(msgs)
     },
   )
